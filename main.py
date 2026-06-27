@@ -45,26 +45,51 @@ app = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
 
 
 @tool
-def searchFireCrawl(legoSet: str):
-    """Look up necessary Lego data pulled from various sites."""
-    print(f"    >>> Executing FireCrawl search for (legoSet='{legoSet}')")
+def searchBricklink(legoSet: str):
+    """Look up necessary Bricklink data"""
+    results = app.scrape_url(f"www.bricklink.com/catalogItemInv.asp?S={legoSet}&bt=5&viewID=Y&sortBy=0&sortAsc=A")
+    if results is None:
+        return f"No BrickLink results found for {legoSet}"
 
-    brickLinkresults = searchBrickLink(legoSet)
+    return results.markdown
+        
+@tool 
+def searchLego(legoSet: str):
+    """Look up official Lego set data"""
+    results = app.search(f"Lego.com set #{legoSet}")
+    if not results:
+        return f"Nothing found on Lego.com for {legoSet}"
+
+    # Firecrawl search usually returns dict with `data`
+    items = results.get("data", []) if isinstance(results, dict) else results
+
+    lego_url = None
+    for item in items:
+        url = item.get("url") or item.get("link")
+        if not url:
+            continue
+        if "lego.com" in url.lower():
+            lego_url = url
+            break
+
+    if not lego_url:
+        return f"Search found results, but none were official lego.com pages for {legoSet}"
+
+    scraped = app.scrape_url(lego_url)
+    if scraped is None or getattr(scraped, "markdown", None) is None:
+        return f"Found official page ({lego_url}) but could not scrape content"
+
+    return scraped.markdown
 
 
-
-
-
-def searchBrickLink(setnumber:str) -> str:
-    
-
-
-
-
+@tool
+def searchBrickowl(legoSet: str):
+    """Searches Brickowl for various lego set info"""
+    pass
 
 @traceable(name="Main StudScan Agent ReAct Loop")
 def run_agent(question:str):
-    tools = [searchFireCrawl]
+    tools = [searchBricklink, searchLego]
     tools_dict = {t.name: t for t in tools}
     
     llm = init_chat_model(MODEL, model_provider="openai", temperature=0)
@@ -99,43 +124,28 @@ def run_agent(question:str):
             print(final_answer)
             return final_answer
 
-        # Action
-        tool_call = tools_calls[0]
-        tool_name = tool_call.get("name")
-        tool_args = tool_call.get("args", {})
-        tool_call_id = tool_call.get("id")
-
-        tool_to_use = tools_dict.get(tool_name)
-        if tool_to_use is None:
-            raise ValueError(f"Tool '{tool_name}' not found")
-        
-        # Observation
-        observation = tool_to_use.invoke(tool_args)
-
         messages.append(query)
-        messages.append(
-            ToolMessage(content=str(observation), tool_call_id=tool_call_id)
-        )
 
-    print("Error: Max iterations reached with a final answer")
+        # Observation
+        for tool_call in tools_calls:
+            tool_name = tool_call.get("name")
+            tool_args = tool_call.get("args", {})
+            tool_call_id = tool_call.get("id")
+
+            tool_to_use = tools_dict.get(tool_name)
+            if tool_to_use is None:
+                raise ValueError(f"Tool '{tool_name}' not found")
+
+            observation = tool_to_use.invoke(tool_args)
+            messages.append(
+                ToolMessage(content=str(observation), tool_call_id=tool_call_id)
+            )
+
+    print("Error: Max iterations reached without a final answer")
     return None
         
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 if __name__ == "__main__":
     result = run_agent("Tell me about lego 10195")
+    print("\nReturned value:")
+    print(result)
 
