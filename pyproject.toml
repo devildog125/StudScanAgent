@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "black>=26.5.1",
     "dotenv>=0.9.9",
+    "firecrawl>=4.30.3",
     "isort>=8.0.1",
     "langchain>=1.3.11",
     "langchain-anthropic>=1.4.8",
