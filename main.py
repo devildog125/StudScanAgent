@@ -34,29 +34,39 @@ class LegoSetReport(BaseModel):
     verdict: str = Field(..., description="1-3 sentence plain-language synthesis, not a restatement of numbers")
 
 
-MAX_ITERATIONS=10
+MAX_ITERATIONS = 10
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 SYSTEM_PROMPT = (
     Path(__file__).resolve().parent / "prompts" / "system_prompt.txt"
 ).read_text(encoding="utf-8").strip()
 
-app = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
+fireCrawler = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
 
 
 @tool
 def searchBricklink(legoSet: str):
     """Look up necessary Bricklink data"""
-    results = app.scrape_url(f"www.bricklink.com/catalogItemInv.asp?S={legoSet}&bt=5&viewID=Y&sortBy=0&sortAsc=A")
-    if results is None:
-        return f"No BrickLink results found for {legoSet}"
 
-    return results.markdown
-        
+    # do a general firecrawl web search here but send bricklink search with set number // retry only 3 times
+    brickLinkSearch = fireCrawler.search(query = f"www.brickeconomy.com/search?query={legoSet}", limit = 3)
+    
+    # bricklink search results should have correct results as the first item, grab that url
+    # as we going to pass that and do a more refined scrape next for better details
+    brickLinkSearchItemUrl = brickLinkSearch.web[0].url
+
+    # take new result and pass to scraper for set details
+    brickLinkDetails = fireCrawler.scrape(brickLinkSearchItemUrl, formats=["markdown", "html"])
+
+
+    return brickLinkDetails.markdown     
+
+
+
 @tool 
 def searchLego(legoSet: str):
     """Look up official Lego set data"""
-    results = app.search(f"Lego.com set #{legoSet}")
+    results = fireCrawler.search(f"Lego.com set #{legoSet}")
     if not results:
         return f"Nothing found on Lego.com for {legoSet}"
 
@@ -75,12 +85,11 @@ def searchLego(legoSet: str):
     if not lego_url:
         return f"Search found results, but none were official lego.com pages for {legoSet}"
 
-    scraped = app.scrape_url(lego_url)
+    scraped = fireCrawler.scrape_url(lego_url)
     if scraped is None or getattr(scraped, "markdown", None) is None:
         return f"Found official page ({lego_url}) but could not scrape content"
 
     return scraped.markdown
-
 
 @tool
 def searchBrickowl(legoSet: str):
@@ -89,7 +98,8 @@ def searchBrickowl(legoSet: str):
 
 @traceable(name="Main StudScan Agent ReAct Loop")
 def run_agent(question:str):
-    tools = [searchBricklink, searchLego]
+    tools = [searchBricklink]
+    # tools = [searchBricklink, searchLego]
     tools_dict = {t.name: t for t in tools}
     
     llm = init_chat_model(MODEL, model_provider="openai", temperature=0)
@@ -133,11 +143,15 @@ def run_agent(question:str):
             tool_call_id = tool_call.get("id")
 
             tool_to_use = tools_dict.get(tool_name)
+
+
             if tool_to_use is None:
                 raise ValueError(f"Tool '{tool_name}' not found")
 
             observation = tool_to_use.invoke(tool_args)
-            messages.append(
+
+
+            messages.fireCrawlerend(
                 ToolMessage(content=str(observation), tool_call_id=tool_call_id)
             )
 
