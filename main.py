@@ -10,11 +10,29 @@ from langchain.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langsmith import traceable
 from firecrawl import Firecrawl
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional
 
+class ResalePrices(BaseModel):
+    bricklink: Optional[float] = None
+    brickowl: Optional[float] = None
+    brickeconomy: Optional[float] = None
 
 class LegoSetReport(BaseModel):
     set_number: str
+    set_name: Optional[str] = None
+    theme: Optional[str] = None
+    retail_price_usd: Optional[float] = Field(None, description="Original MSRP in USD, sourced from LEGO.com")
+    piece_count: Optional[int] = None
+    availability_status: Optional[str] = Field(None, description="in production / retired / exclusive")
+    resale_new: ResalePrices = Field(default_factory=ResalePrices)
+    resale_used: ResalePrices = Field(default_factory=ResalePrices)
+    growth_percent_since_release: Optional[float] = None
+    retirement_date: Optional[str] = None
+    sources_missing: list[str] = Field(default_factory=list)
+    discrepancies: list[str] = Field(default_factory=list)
+    verdict: str = Field(..., description="1-3 sentence plain-language synthesis, not a restatement of numbers")
+
 
 MAX_ITERATIONS=10
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -38,7 +56,7 @@ def searchFireCrawl(legoSet: str):
 
 
 def searchBrickLink(setnumber:str) -> str:
-
+    
 
 
 
