@@ -13,6 +13,7 @@ from langsmith import traceable
 from firecrawl import Firecrawl
 from models import LegoSetReport, LegoSite, BrickEconomy
 
+fire_crawler = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
 
 SYSTEM_PROMPT = (
     Path(__file__).resolve().parent / "prompts" / "system_prompt.txt"
@@ -22,48 +23,20 @@ LEGO_SITE_PROMPT = (
     Path(__file__).resolve().parent / "prompts" / "lego_site_prompt.txt"
 ).read_text(encoding="utf-8").strip()
 
+BRICKECON_PROMPT = (
+    Path(__file__).resolve().parent / "prompts" / "brickecon_prompt.txt"
+).read_text(encoding="utf-8").strip()
 
-
-
-
-
-fire_crawler = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
-
-
-@tool
-def search_brickeconomy(lego_set: str):
-    """Look up necessary Brickeconomy data"""
-
-    # do a general firecrawl web search here but send brickeconomy search with set number // retry only 3 times
-    brickeconomy_search = fire_crawler.search(query = f"www.brickeconomy.com/search?query={lego_set}", limit = 3)
+def create_summary_md(site:str, set_number:str) -> str:
+    """ Ingests a set_number and site, performs fire crawl scrape via structured output,
+            passes back summarized md."""
     
-    # brickeconomy search results should have correct results as the first item, grab that url
-    # as we going to pass that and do a more refined scrape next for better details
-    brickeconomy_search_item_url = brickeconomy_search.web[0].url
-
-    # take new result and pass to scraper for set details
-    brickeconomy_details = fire_crawler.scrape(brickeconomy_search_item_url, formats=["markdown", "html"])
-
-    raw_markdown = brickeconomy_details.markdown or ""
-
-    # summarized_markdown
-
-    return raw_markdown
-
-@tool 
-def search_lego(lego_set: str):
-    """Search Lego.com for any relevant data up to date unless its bui
-
-    Args:
-        query: Search terms to look for
-        limit: Maximum number of results to return
-    """
-
     # do a broad search
-    results = fire_crawler.search(f"Lego.com set #{lego_set}")
+    results = fire_crawler.search(f"{site} set #{set_number}")
     if not results:
-        return f"Nothing found on Lego.com for {lego_set}"
+        return f"Unable to perform fire crawl search for site: {site} and {set_number}"
 
+    # drill down to get correct search results
     items = []
     if isinstance(results, dict):
         items = results.get("data", [])
@@ -72,8 +45,8 @@ def search_lego(lego_set: str):
     elif hasattr(results, "web"):
         items = results.web
 
-    # loop through the broad list to find the actual legit lego site
-    lego_url = None
+    # loop through the broad list to find the actual site
+    site_url = None
     for item in items:
         url = None
         if isinstance(item, dict):
@@ -85,18 +58,19 @@ def search_lego(lego_set: str):
             continue
 
         lower_url = url.lower()
-        is_lego = "lego.com" in lower_url
+        is_set_page = site in lower_url
 
-        if is_lego:
-            lego_url = url
+        if is_set_page:
+            site_url = url
             break
 
-    if not lego_url:
-        return f"No official lego.com non-instructions page found for {lego_set}"
+    # if we don't find anything, return a null
+    if not site_url:
+        return f"Couldn't find given site {site} from fire crawl search"
 
-    page = fire_crawler.scrape_url(lego_url)
+    page = fire_crawler.scrape(site_url, limit = 3)
     if page is None or getattr(page, "markdown", None) is None:
-        return f"Found {lego_url} but could not scrape markdown"
+        return f"Unable to scrape page {site_url}"
 
     raw_markdown = page.markdown or ""
 
@@ -109,12 +83,30 @@ def search_lego(lego_set: str):
 
     return summarized_markdown
 
+@tool 
+def search_lego(lego_set: str) -> str:
+    """Search Lego.com for any official Lego data"""
+    
+    official_lego_md = create_summary_md("lego.com", lego_set)
+
+    return official_lego_md
+
 
 @tool
-def search_brickowl(lego_set: str):
-    """Searches Brickowl for various lego set info"""
+def search_brickeconomy(lego_set: str):
+    """Look up necessary BrickEconomy data for historical and potential future data"""
 
+    brickecon_historical_data_md = create_summary_md("brickeconomy.com", lego_set)
 
+    return brickecon_historical_data_md
+
+@tool
+def search_bricklink(lego_set: str):
+    """Searches bricklink for various lego set info"""
+    
+    bricklink_set_data = create_summary_md("bricklink.com", lego_set)
+
+    return bricklink_set_data
 
 @traceable(name="Main StudScan Agent ReAct Loop")
 def run_agent(question:str):
