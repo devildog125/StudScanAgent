@@ -1,0 +1,19 @@
+"Analyze the provided Markdown content from BrickEconomy. Extract the following information into a Pydantic model object:
+
+set_number: Identify the set number (e.g., '75415-1').
+
+name: Full product name.
+
+theme: The primary LEGO theme.
+
+subtheme: The specific subtheme.
+
+release_year: The year of release.
+
+retail_price: Extract the numerical retail price (remove currency symbols).
+
+piece_count: Total number of pieces.
+
+retirement_forecast: Extract the projected retirement date.
+
+expected_value_post_retirement: Extract the predicted value range after the set retires, if provided."

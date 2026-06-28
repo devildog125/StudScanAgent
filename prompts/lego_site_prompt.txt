@@ -1,0 +1,13 @@
+"Analyze the provided text for the LEGO product. Extract the following information and return it as a Pydantic model object:
+
+product_title: The full name of the set.
+
+price: The numerical price (remove the dollar sign).
+
+piece_count: The total number of pieces.
+
+recommended_age: The age rating (e.g., '18+').
+
+average_rating: The numeric average rating.
+
+summary: A moderate summary of the product."

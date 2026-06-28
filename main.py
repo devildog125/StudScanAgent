@@ -11,56 +11,47 @@ from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langsmith import traceable
 from firecrawl import Firecrawl
-from pydantic import BaseModel, Field
-from typing import Optional
-
-class ResalePrices(BaseModel):
-    bricklink: Optional[float] = None
-    brickowl: Optional[float] = None
-    brickeconomy: Optional[float] = None
-
-class LegoSetReport(BaseModel):
-    set_number: str
-    set_name: Optional[str] = None
-    theme: Optional[str] = None
-    retail_price_usd: Optional[float] = Field(None, description="Original MSRP in USD, sourced from LEGO.com")
-    piece_count: Optional[int] = None
-    availability_status: Optional[str] = Field(None, description="in production / retired / exclusive")
-    resale_new: ResalePrices = Field(default_factory=ResalePrices)
-    resale_used: ResalePrices = Field(default_factory=ResalePrices)
-    growth_percent_since_release: Optional[float] = None
-    retirement_date: Optional[str] = None
-    sources_missing: list[str] = Field(default_factory=list)
-    discrepancies: list[str] = Field(default_factory=list)
-    verdict: str = Field(..., description="1-3 sentence plain-language synthesis, not a restatement of numbers")
+from models import LegoSetReport, LegoSite, BrickEconomy
 
 
 SYSTEM_PROMPT = (
     Path(__file__).resolve().parent / "prompts" / "system_prompt.txt"
 ).read_text(encoding="utf-8").strip()
 
-fireCrawler = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
+LEGO_SITE_PROMPT = (
+    Path(__file__).resolve().parent / "prompts" / "lego_site_prompt.txt"
+).read_text(encoding="utf-8").strip()
+
+
+
+
+
+
+fire_crawler = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
 
 
 @tool
-def searchBricklink(legoSet: str):
-    """Look up necessary Bricklink data"""
+def search_brickeconomy(lego_set: str):
+    """Look up necessary Brickeconomy data"""
 
-    # do a general firecrawl web search here but send bricklink search with set number // retry only 3 times
-    brickLinkSearch = fireCrawler.search(query = f"www.brickeconomy.com/search?query={legoSet}", limit = 3)
+    # do a general firecrawl web search here but send brickeconomy search with set number // retry only 3 times
+    brickeconomy_search = fire_crawler.search(query = f"www.brickeconomy.com/search?query={lego_set}", limit = 3)
     
-    # bricklink search results should have correct results as the first item, grab that url
+    # brickeconomy search results should have correct results as the first item, grab that url
     # as we going to pass that and do a more refined scrape next for better details
-    brickLinkSearchItemUrl = brickLinkSearch.web[0].url
+    brickeconomy_search_item_url = brickeconomy_search.web[0].url
 
     # take new result and pass to scraper for set details
-    brickLinkDetails = fireCrawler.scrape(brickLinkSearchItemUrl, formats=["markdown", "html"])
+    brickeconomy_details = fire_crawler.scrape(brickeconomy_search_item_url, formats=["markdown", "html"])
 
+    raw_markdown = brickeconomy_details.markdown or ""
 
-    return brickLinkDetails.markdown     
+    # summarized_markdown
+
+    return raw_markdown
 
 @tool 
-def searchLego(legoSet: str):
+def search_lego(lego_set: str):
     """Search Lego.com for any relevant data up to date unless its bui
 
     Args:
@@ -69,9 +60,9 @@ def searchLego(legoSet: str):
     """
 
     # do a broad search
-    results = fireCrawler.search(f"Lego.com set #{legoSet}")
+    results = fire_crawler.search(f"Lego.com set #{lego_set}")
     if not results:
-        return f"Nothing found on Lego.com for {legoSet}"
+        return f"Nothing found on Lego.com for {lego_set}"
 
     items = []
     if isinstance(results, dict):
@@ -101,18 +92,29 @@ def searchLego(legoSet: str):
             break
 
     if not lego_url:
-        return f"No official lego.com non-instructions page found for {legoSet}"
+        return f"No official lego.com non-instructions page found for {lego_set}"
 
-    page = fireCrawler.scrape_url(lego_url)
+    page = fire_crawler.scrape_url(lego_url)
     if page is None or getattr(page, "markdown", None) is None:
         return f"Found {lego_url} but could not scrape markdown"
 
-    return page.markdown
+    raw_markdown = page.markdown or ""
+
+    # spin up sub_agent via same model to summarize raw mark down into pydantic model
+    sub_agent = create_agent(model="gpt-4o-mini",
+                              response_format=LegoSite,
+                              system_prompt=LEGO_SITE_PROMPT)
+    
+    summarized_markdown = sub_agent.invoke({"messages": [{"role": "user", "content": f"{raw_markdown}"}]})
+
+    return summarized_markdown
+
 
 @tool
-def searchBrickowl(legoSet: str):
+def search_brickowl(lego_set: str):
     """Searches Brickowl for various lego set info"""
-    pass
+
+
 
 @traceable(name="Main StudScan Agent ReAct Loop")
 def run_agent(question:str):
@@ -121,13 +123,13 @@ def run_agent(question:str):
     agent = create_agent(model="gpt-4o-mini", 
                          response_format=LegoSetReport,
                          system_prompt=SYSTEM_PROMPT,
-                         tools = [searchBricklink, searchLego])
+                         tools = [search_brickeconomy, search_lego])
     
     result = agent.invoke({"messages": [{"role": "user", "content": question}]})
     return result["structured_response"]
         
 if __name__ == "__main__":
-    result = run_agent("Tell me about lego 10195")
+    result = run_agent("Tell me about lego 75415")
     print("\nReturned value:")
     print(result.verdict)
 
