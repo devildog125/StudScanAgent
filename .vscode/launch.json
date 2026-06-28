@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: main.py (.venv)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\main.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "envFile": "${workspaceFolder}\\.env",
+      "args": ["75415"]
+    }
+  ]
+}

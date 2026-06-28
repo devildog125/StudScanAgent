@@ -1,12 +1,22 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ResalePrices(BaseModel):
     bricklink: Optional[float] = None
     brickowl: Optional[float] = None
     brickeconomy: Optional[float] = None
+
+    #this was created so the llm sent dicts are converted correctly by pydantic
+    @field_validator('bricklink', 'brickowl', 'brickeconomy', mode='before')
+    @classmethod
+    def unwrap_schema_objects(cls, v):
+        if isinstance(v, dict):
+            if v.get('type') == 'null':
+                return None
+            return v.get('value')
+        return v
 
 
 class LegoSetReport(BaseModel):
@@ -33,7 +43,6 @@ class LegoSetReport(BaseModel):
         description="1-3 sentence plain-language synthesis, not a restatement of numbers",
     )
 
-
 class LegoSite(BaseModel):
     product_title: str
     price: float
@@ -44,7 +53,7 @@ class LegoSite(BaseModel):
     image_urls: Optional[List[str]] = Field( max_length=8, default_factory=list)
     recommended_products: Optional[List[dict]] = Field(
         description="Top 3 recommended products with title and price",
-        default_factory=dict
+        default_factory=list
     )
 
 class BrickEconomy(BaseModel):
@@ -54,6 +63,16 @@ class BrickEconomy(BaseModel):
     subtheme: str
     release_year: int
     retail_price: float = Field(description="The official retail price as a float")
+    resale_new: Optional[float] = Field(description="The estimated new/sealed price")
+    resale_used: Optional[float] = Field(description="The estimated used price")
     piece_count: int
     retirement_forecast: Optional[str] = Field(description="Projected retirement timeframe")
     expected_value_post_retirement: Optional[str] = Field(None, description="Estimated value range after retirement")
+
+class BrickLinkInventory(BaseModel):
+    set_number: str
+    set_name: str
+    total_regular_parts: int = Field(description="Total quantity of regular parts from the summary table")
+    unique_regular_lots: int = Field(description="Total unique lots of regular parts from the summary table")
+    new_price: Optional[float] = Field(None, description="Average or current price for a new set")
+    used_price: Optional[float] = Field(None, description="Average or current price for a used set")

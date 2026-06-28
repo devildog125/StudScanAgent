@@ -1,0 +1,1 @@
+Analyze the provided BrickLink Markdown. Extract the set information into a JSON object. Focus on extracting the set_number, set_name, total_regular_parts, and unique_regular_lots from the summary section. Most importantly, search the page for pricing information and extract the current average new_price and used_price. Do not extract individual inventory parts.

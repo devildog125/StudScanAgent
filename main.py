@@ -1,17 +1,21 @@
 
 import os
+import sys
 from pathlib import Path
+from collections.abc import Callable
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain.chat_models import init_chat_model
 from langchain.tools import tool
+from langchain.tools.tool_node import ToolCallRequest
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain.agents.middleware import wrap_tool_call, ToolRetryMiddleware
+from langchain.messages import ToolMessage
 from langsmith import traceable
 from firecrawl import Firecrawl
-from models import LegoSetReport, LegoSite, BrickEconomy
+from models import LegoSetReport, LegoSite, BrickEconomy, BrickLinkInventory
+
 
 fire_crawler = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
 
@@ -27,12 +31,35 @@ BRICKECON_PROMPT = (
     Path(__file__).resolve().parent / "prompts" / "brickecon_prompt.txt"
 ).read_text(encoding="utf-8").strip()
 
+_bricklink_prompt_path = Path(__file__).resolve().parent / "prompts" / "bricklink_prompt.txt"
+BRICKLINK_PROMPT = (
+    _bricklink_prompt_path.read_text(encoding="utf-8").strip()
+    if _bricklink_prompt_path.exists()
+    else LEGO_SITE_PROMPT
+)
+
+
+def _to_tool_text(result: object) -> str:
+    """Normalize structured model/tool output into stable text for parent agent tools."""
+    if isinstance(result, dict) and "structured_response" in result:
+        structured = result["structured_response"]
+    else:
+        structured = result
+
+    if hasattr(structured, "model_dump_json"):
+        return structured.model_dump_json()
+
+    return str(structured)
+
 def create_summary_md(site:str, set_number:str) -> str:
     """ Ingests a set_number and site, performs fire crawl scrape via structured output,
             passes back summarized md."""
     
     # do a broad search
-    results = fire_crawler.search(f"{site} set #{set_number}")
+    try:
+        results = fire_crawler.search(f"{site} set #{set_number}")
+    except Exception as exc:
+        return f"Firecrawl search failed for {site} set {set_number}: {exc}"
     if not results:
         return f"Unable to perform fire crawl search for site: {site} and {set_number}"
 
@@ -68,20 +95,55 @@ def create_summary_md(site:str, set_number:str) -> str:
     if not site_url:
         return f"Couldn't find given site {site} from fire crawl search"
 
-    page = fire_crawler.scrape(site_url, limit = 3)
+    try:
+        page = fire_crawler.scrape(site_url)
+    except Exception as exc:
+        return f"Firecrawl scrape failed for {site_url}: {exc}"
     if page is None or getattr(page, "markdown", None) is None:
         return f"Unable to scrape page {site_url}"
 
     raw_markdown = page.markdown or ""
 
-    # spin up sub_agent via same model to summarize raw mark down into pydantic model
-    sub_agent = create_agent(model="gpt-4o-mini",
-                              response_format=LegoSite,
-                              system_prompt=LEGO_SITE_PROMPT)
-    
-    summarized_markdown = sub_agent.invoke({"messages": [{"role": "user", "content": f"{raw_markdown}"}]})
+    # Route schema + prompt by source site so each extractor enforces the right shape.
+    site_key = site.lower()
+    format_and_prompt_by_site = {
+        "lego.com": (LegoSite, LEGO_SITE_PROMPT),
+        "brickeconomy.com": (BrickEconomy, BRICKECON_PROMPT),
+        "bricklink.com": (BrickLinkInventory, BRICKLINK_PROMPT)
+    }
+    response_format, system_prompt = format_and_prompt_by_site.get(
+        site_key,
+        (LegoSite, LEGO_SITE_PROMPT),
+    )
 
-    return summarized_markdown
+    # spin up sub_agent via same model to summarize raw markdown into a pydantic model
+    sub_agent = create_agent(
+        model="gpt-4o-mini",
+        response_format=response_format,
+        system_prompt=system_prompt,
+    )
+    
+    try:
+        summarized_markdown = sub_agent.invoke({"messages": [{"role": "user", "content": f"{raw_markdown}"}]})
+    except Exception as exc:
+        return f"Extraction agent failed for {site_url}: {exc}"
+
+    return _to_tool_text(summarized_markdown)
+
+@wrap_tool_call
+def handle_tool_errors(
+    request: ToolCallRequest,
+    handler: Callable[[ToolCallRequest], ToolMessage],
+) -> ToolMessage:
+    """Convert tool exceptions into ToolMessages the model can handle."""
+    try:
+        return handler(request)
+    except Exception as e:
+        return ToolMessage(
+            content=f"Tool error: Please check your input and try again. ({e})",
+            tool_call_id=request.tool_call["id"],
+        )
+
 
 @tool 
 def search_lego(lego_set: str) -> str:
@@ -93,7 +155,7 @@ def search_lego(lego_set: str) -> str:
 
 
 @tool
-def search_brickeconomy(lego_set: str):
+def search_brickeconomy(lego_set: str) -> str:
     """Look up necessary BrickEconomy data for historical and potential future data"""
 
     brickecon_historical_data_md = create_summary_md("brickeconomy.com", lego_set)
@@ -101,7 +163,7 @@ def search_brickeconomy(lego_set: str):
     return brickecon_historical_data_md
 
 @tool
-def search_bricklink(lego_set: str):
+def search_bricklink(lego_set: str) -> str:
     """Searches bricklink for various lego set info"""
     
     bricklink_set_data = create_summary_md("bricklink.com", lego_set)
@@ -115,13 +177,21 @@ def run_agent(question:str):
     agent = create_agent(model="gpt-4o-mini", 
                          response_format=LegoSetReport,
                          system_prompt=SYSTEM_PROMPT,
-                         tools = [search_brickeconomy, search_lego])
+                         tools = [search_brickeconomy, search_lego, search_bricklink],
+                         middleware=[
+                             ToolRetryMiddleware( max_retries= 1 )
+                         ])
     
     result = agent.invoke({"messages": [{"role": "user", "content": question}]})
+
     return result["structured_response"]
         
 if __name__ == "__main__":
-    result = run_agent("Tell me about lego 75415")
+    if len(sys.argv) < 2:
+        print("Usage: python main.py <set_number>")
+        sys.exit(1)
+    set_number = sys.argv[1]
+    result = run_agent(f"Tell me about lego {set_number}")
     print("\nReturned value:")
     print(result.verdict)
 

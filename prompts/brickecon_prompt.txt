@@ -12,6 +12,10 @@ release_year: The year of release.
 
 retail_price: Extract the numerical retail price (remove currency symbols).
 
+resale_new: Extract the nummerical resale price as New/Sealed.
+
+resale_used: Extract the numerical resale price as Used.
+
 piece_count: Total number of pieces.
 
 retirement_forecast: Extract the projected retirement date.

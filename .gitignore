@@ -47,7 +47,6 @@ checkpoints/
 *.ipynb
 
 # IDEs
-.vscode/
 .idea/
 *.swp
 *.swo
